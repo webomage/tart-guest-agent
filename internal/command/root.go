@@ -31,6 +31,7 @@ var resizeDisk bool
 var runVdagent bool
 var runRPC bool
 var runTray bool
+var execWrapper []string
 
 var runDaemon bool
 var runAgent bool
@@ -116,6 +117,8 @@ func NewRootCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&runDoctor, "doctor", false, "run guest agent environment and capability diagnostics")
 	cmd.Flags().BoolVar(&runNotifications, "notifications", false, "open recent notifications and activity panel")
 	cmd.Flags().BoolVar(&runSettings, "settings", false, "open settings and preferences dialog")
+	cmd.Flags().StringArrayVar(&execWrapper, "exec-wrapper", nil,
+		"argv prefix for every RPC command; repeat for each argument (first must be an absolute executable path)")
 
 	// Component groups
 	cmd.Flags().BoolVar(&runDaemon, "run-daemon", false, "identical to running the agent"+
@@ -174,6 +177,13 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 
 		zap.S().Infof("running on Tart %s, proceeding...", version.String())
+	}
+
+	if len(execWrapper) > 0 && !runRPC {
+		return errors.New("--exec-wrapper requires --run-rpc or --run-agent")
+	}
+	if err := rpc.ValidateExecWrapper(execWrapper); err != nil {
+		return err
 	}
 
 	// Perform disk resizing
@@ -291,7 +301,7 @@ func runRPCOnce(ctx context.Context) error {
 	}
 	defer listener.Close()
 
-	rpcServer, err := rpc.New(listener)
+	rpcServer, err := rpc.New(listener, execWrapper...)
 	if err != nil {
 		zap.S().Errorf("failed to initialize RPC server: %v", err)
 

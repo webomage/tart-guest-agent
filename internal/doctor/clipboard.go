@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -60,8 +61,9 @@ func CheckClipboard(enableWriteProbe bool) CheckResult {
 	details = append(details, "Formats Supported: UTF-8 Text, PNG/BMP/TIFF/JPG Images (with auto-optimization)")
 
 	// Passive inspection of current clipboard content (preserves user state)
-	origText := clipboard.Read(clipboard.FmtText)
-	origImg := clipboard.Read(clipboard.FmtImage)
+	ctx := context.Background()
+	origText, _ := clipboard.Read(ctx, clipboard.FmtText)
+	origImg, _ := clipboard.Read(ctx, clipboard.FmtImage)
 
 	if len(origText) > 0 {
 		details = append(details, fmt.Sprintf("Current Content: %d bytes (text data present)", len(origText)))
@@ -78,14 +80,15 @@ func CheckClipboard(enableWriteProbe bool) CheckResult {
 			details = append(details, "Live Self-Test: PASS (active image clipboard content preserved)")
 		} else {
 			testProbe := fmt.Sprintf("tart_selftest_%d", time.Now().UnixNano())
-			clipboard.Write(clipboard.FmtText, []byte(testProbe))
-			readBack := string(clipboard.Read(clipboard.FmtText))
+			_, _ = clipboard.Write(ctx, clipboard.FmtText, []byte(testProbe))
+			readBackBytes, _ := clipboard.Read(ctx, clipboard.FmtText)
+			readBack := string(readBackBytes)
 
 			// Atomically restore original text representation
 			if len(origText) > 0 {
-				clipboard.Write(clipboard.FmtText, origText)
+				_, _ = clipboard.Write(ctx, clipboard.FmtText, origText)
 			} else {
-				clipboard.Write(clipboard.FmtText, []byte{})
+				_, _ = clipboard.Write(ctx, clipboard.FmtText, []byte{})
 			}
 
 			if readBack == testProbe {

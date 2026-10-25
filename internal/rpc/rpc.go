@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/cirruslabs/tart-guest-agent/pkg/v1"
@@ -15,20 +16,26 @@ import (
 type RPC struct {
 	v1.UnimplementedAgentServer
 
-	grpcServer *grpc.Server
-	listener   net.Listener
-	execs      *xsync.Map[string, *os.Process]
+	grpcServer  *grpc.Server
+	listener    net.Listener
+	execs       *xsync.Map[string, *os.Process]
+	execWrapper []string
 }
 
-func New(listener net.Listener) (*RPC, error) {
+func New(listener net.Listener, execWrapper ...string) (*RPC, error) {
+	if err := ValidateExecWrapper(execWrapper); err != nil {
+		return nil, err
+	}
+
 	rpc := &RPC{
 		grpcServer: grpc.NewServer(
 			grpc.KeepaliveParams(keepalive.ServerParameters{
 				MaxConnectionIdle: 5 * time.Second,
 			}),
 		),
-		listener:   listener,
-		execs:      xsync.NewMap[string, *os.Process](),
+		listener:    listener,
+		execs:       xsync.NewMap[string, *os.Process](),
+		execWrapper: slices.Clone(execWrapper),
 	}
 
 	v1.RegisterAgentServer(rpc.grpcServer, rpc)

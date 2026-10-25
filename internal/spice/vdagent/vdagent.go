@@ -279,7 +279,7 @@ func (agent *VDAgent) Run(ctx context.Context) error {
 					}
 
 				case <-pollTicker.C:
-					formats := clipboard.Formats()
+					formats, _ := clipboard.Formats(context.Background())
 					agent.clipMu.Lock()
 					hadContent := !agent.isHostOwned && ((agent.lastClipboardState != nil && len(agent.lastClipboardState) > 0) || len(agent.lastAdvertisedTypes) > 0)
 					initialGen := agent.clipGen
@@ -442,20 +442,20 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 			return nil
 		}
 
-		formats := clipboard.Formats()
+		formats, _ := clipboard.Formats(context.Background())
 		var (
 			baselineData []byte
 			baselineType uint32 = vd.VD_AGENT_CLIPBOARD_NONE
 		)
 		if slices.Contains(formats, clipboard.FmtImage) {
-			rawImg := clipboard.Read(clipboard.FmtImage)
+			rawImg := func() []byte { b, _ := clipboard.Read(context.Background(), clipboard.FmtImage); return b }()
 			if len(rawImg) > 0 {
 				baselineData = rawImg
 				baselineType = vd.VD_AGENT_CLIPBOARD_IMAGE_PNG
 			}
 		}
 		if baselineType == vd.VD_AGENT_CLIPBOARD_NONE && slices.Contains(formats, clipboard.FmtText) {
-			rawText := clipboard.Read(clipboard.FmtText)
+			rawText := func() []byte { b, _ := clipboard.Read(context.Background(), clipboard.FmtText); return b }()
 			if len(rawText) > 0 {
 				baselineData = rawText
 				baselineType = vd.VD_AGENT_CLIPBOARD_UTF8_TEXT
@@ -483,7 +483,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 			agent.lastClipboardType = vd.VD_AGENT_CLIPBOARD_NONE
 			agent.clipMu.Unlock()
 
-			clipboard.Write(clipboard.FmtText, nil)
+			_, _ = clipboard.Write(context.Background(), clipboard.FmtText, nil)
 			return nil
 		}
 
@@ -536,7 +536,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 			agent.clipMu.Unlock()
 
 			if wasHostOwned {
-				clipboard.Write(clipboard.FmtText, nil)
+				_, _ = clipboard.Write(context.Background(), clipboard.FmtText, nil)
 				zap.S().Debugf("Cleared agent-owned clipboard on VD_AGENT_CLIPBOARD_NONE")
 			}
 		case vd.VD_AGENT_CLIPBOARD_IMAGE_PNG, vd.VD_AGENT_CLIPBOARD_IMAGE_BMP, vd.VD_AGENT_CLIPBOARD_IMAGE_TIFF, vd.VD_AGENT_CLIPBOARD_IMAGE_JPG:
@@ -571,7 +571,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 				agent.clipMu.Unlock()
 
 				if wasHostOwned {
-					clipboard.Write(clipboard.FmtText, nil)
+					_, _ = clipboard.Write(context.Background(), clipboard.FmtText, nil)
 				}
 				return nil
 			}
@@ -591,7 +591,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 			agent.selfImageWritePending = true
 			agent.clipMu.Unlock()
 
-			clipboard.Write(clipboard.FmtImage, optimized)
+			_, _ = clipboard.Write(context.Background(), clipboard.FmtImage, optimized)
 			zap.S().Debugf("Wrote image clipboard data (%d bytes -> %d bytes)", len(vdAgentClipboard.Data), len(optimized))
 		case vd.VD_AGENT_CLIPBOARD_UTF8_TEXT:
 			agent.clipMu.Lock()
@@ -607,7 +607,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 			agent.selfTextWritePending = true
 			agent.clipMu.Unlock()
 
-			clipboard.Write(clipboard.FmtText, vdAgentClipboard.Data)
+			_, _ = clipboard.Write(context.Background(), clipboard.FmtText, vdAgentClipboard.Data)
 			zap.S().Debugf("Wrote text clipboard data (%d bytes)", len(vdAgentClipboard.Data))
 		default:
 			zap.S().Warnf("ignoring unsupported clipboard data type %d", vdAgentClipboard.Type)
@@ -644,7 +644,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 		agent.clipMu.Unlock()
 
 		if wasHostOwned {
-			clipboard.Write(clipboard.FmtText, nil)
+			_, _ = clipboard.Write(context.Background(), clipboard.FmtText, nil)
 			zap.S().Debugf("Cleared agent-owned clipboard on VD_AGENT_CLIPBOARD_RELEASE")
 		} else {
 			zap.S().Debugf("Preserved newer guest-owned clipboard on VD_AGENT_CLIPBOARD_RELEASE")
@@ -683,7 +683,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 				zap.S().Debugf("ignoring image clipboard request because image clipboard is disabled in settings")
 				return agent.sendClipboardData(vdAgentClipboardRequest.Selection, vd.VD_AGENT_CLIPBOARD_NONE, nil)
 			}
-			rawImg := clipboard.Read(clipboard.FmtImage)
+			rawImg := func() []byte { b, _ := clipboard.Read(context.Background(), clipboard.FmtImage); return b }()
 			if len(rawImg) > 0 {
 				if optimized, err := imageopt.OptimizeImage(rawImg); err == nil {
 					data = optimized
@@ -695,7 +695,7 @@ func (agent *VDAgent) handleMessage(vdiAgentMessage *vd.VDAgentMessage) error {
 		case vd.VD_AGENT_CLIPBOARD_UTF8_TEXT:
 			fallthrough
 		default:
-			data = clipboard.Read(clipboard.FmtText)
+			data = func() []byte { b, _ := clipboard.Read(context.Background(), clipboard.FmtText); return b }()
 			respType = vd.VD_AGENT_CLIPBOARD_UTF8_TEXT
 		}
 
@@ -807,7 +807,7 @@ func getAvailableGrabTypes(formats []clipboard.Format, isImageValid bool, isText
 }
 
 func (agent *VDAgent) processClipboardState(newClipboardState []byte, clipType uint32) error {
-	formats := clipboard.Formats()
+	formats, _ := clipboard.Formats(context.Background())
 	var (
 		isImageValid      bool
 		candidateRawImage []byte
