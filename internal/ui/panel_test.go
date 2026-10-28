@@ -101,3 +101,23 @@ func TestResolveDownloadsFolder_FallbackOnInaccessiblePath(t *testing.T) {
 	assert.DirExists(t, resolved)
 }
 
+func TestFormatTrayMenu(t *testing.T) {
+	items := []string{
+		"⚡ Tart Guest Agent (dev)",
+		"🟢 Status: Active",
+		"---",
+		"🔔 Recent Activity & Notifications...",
+		"⚙️ Settings & Preferences...",
+		"---",
+		"❌ Quit",
+	}
+	prompt, selectable := FormatTrayMenu(items)
+	assert.Contains(t, prompt, "Tart Guest Agent")
+	assert.Contains(t, prompt, "Status: Active")
+	assert.Equal(t, []string{
+		"🔔 Recent Activity & Notifications...",
+		"⚙️ Settings & Preferences...",
+		"❌ Quit",
+	}, selectable)
+}
+

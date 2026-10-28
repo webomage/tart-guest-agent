@@ -2,6 +2,7 @@ package tray
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrQuit signals that the user requested to quit the tray service from the menu.
+var ErrQuit = errors.New("tray: quit requested")
+
+// defaultMenuPresenter is the default menu rendering function used by New().
+var defaultMenuPresenter = ui.ShowTrayMenu
+
 // Status represents the operational state of the guest agent.
 type Status string
 
@@ -27,14 +34,16 @@ const (
 
 // Tray manages the system tray / menu bar item and interactive actions.
 type Tray struct {
-	mu     sync.RWMutex
-	status Status
+	mu            sync.RWMutex
+	status        Status
+	menuPresenter func(context.Context, []string) (string, error)
 }
 
 // New creates a new Tray controller.
 func New() *Tray {
 	return &Tray{
-		status: StatusActive,
+		status:        StatusActive,
+		menuPresenter: defaultMenuPresenter,
 	}
 }
 
@@ -78,11 +87,37 @@ func (t *Tray) MenuItems() []string {
 	}
 }
 
+// ActionForMenuItem maps a rendered MenuItems() label or action name to its canonical action key.
+func ActionForMenuItem(choice string) string {
+	lower := strings.ToLower(strings.TrimSpace(choice))
+	switch {
+	case lower == "":
+		return ""
+	case lower == "notifications" || lower == "activity" || strings.Contains(lower, "notification") || strings.Contains(lower, "recent activity"):
+		return "notifications"
+	case lower == "settings" || strings.Contains(lower, "setting") || strings.Contains(lower, "preference"):
+		return "settings"
+	case lower == "doctor" || strings.Contains(lower, "diagnostic") || strings.Contains(lower, "doctor"):
+		return "doctor"
+	case lower == "downloads" || strings.Contains(lower, "download"):
+		return "downloads"
+	case lower == "quit" || lower == "exit" || strings.Contains(lower, "quit"):
+		return "quit"
+	default:
+		return ""
+	}
+}
+
 // HandleAction executes the requested action triggered from the tray menu.
 func (t *Tray) HandleAction(action string) error {
 	zap.S().Debugf("Tray menu action triggered: %s", action)
 
-	switch action {
+	canonical := ActionForMenuItem(action)
+	if canonical == "" {
+		canonical = action
+	}
+
+	switch canonical {
 	case "notifications", "activity":
 		return ui.ShowNotificationsPanel()
 	case "settings":
@@ -100,6 +135,8 @@ func (t *Tray) HandleAction(action string) error {
 		return ui.ShowDoctorDialog(sb.String(), report.Overall.String())
 	case "downloads":
 		return ui.OpenDownloadsFolder()
+	case "quit", "exit":
+		return ErrQuit
 	default:
 		return fmt.Errorf("unknown tray action: %s", action)
 	}
@@ -117,7 +154,8 @@ func Dispatch(action string) {
 	}
 }
 
-// Run starts the tray controller and listens for context cancellation.
+// Run starts the tray controller, renders the interactive menu loop when a GUI session is present,
+// dispatches selected menu actions via Dispatch, and listens for context cancellation.
 func (t *Tray) Run(ctx context.Context) error {
 	zap.S().Infof("Starting Tart Guest Agent tray service (version %s)", version.Version)
 
@@ -129,6 +167,48 @@ func (t *Tray) Run(ctx context.Context) error {
 
 	activity.Record(activity.CategorySystem, "Tart Guest Agent started", fmt.Sprintf("Version %s", version.Version), "success")
 
+	loopCtx, cancelLoop := context.WithCancel(ctx)
+	defer cancelLoop()
+
+	menuReadyCh := make(chan struct{}, 1)
+	menuReadyCh <- struct{}{}
+
+	t.mu.RLock()
+	presenter := t.menuPresenter
+	t.mu.RUnlock()
+	if presenter == nil {
+		presenter = defaultMenuPresenter
+	}
+
+	go func() {
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-menuReadyCh:
+			}
+
+			choice, err := presenter(loopCtx, t.MenuItems())
+			if err != nil {
+				if loopCtx.Err() == nil && !errors.Is(err, ui.ErrMenuDismissed) {
+					zap.S().Debugf("tray: menu presenter exited: %v", err)
+				}
+				return
+			}
+
+			action := ActionForMenuItem(choice)
+			if action == "" {
+				select {
+				case menuReadyCh <- struct{}{}:
+				default:
+				}
+				continue
+			}
+
+			Dispatch(action)
+		}
+	}()
+
 	// Run tray action-dispatch and lifecycle event loop
 	for {
 		select {
@@ -137,7 +217,15 @@ func (t *Tray) Run(ctx context.Context) error {
 			return ctx.Err()
 		case act := <-actionCh:
 			if err := t.HandleAction(act); err != nil {
+				if errors.Is(err, ErrQuit) {
+					zap.S().Infof("Stopping Tart Guest Agent tray service (quit requested)")
+					return nil
+				}
 				zap.S().Warnf("tray: error handling action %q: %v", act, err)
+			}
+			select {
+			case menuReadyCh <- struct{}{}:
+			default:
 			}
 		}
 	}

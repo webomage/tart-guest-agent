@@ -26,6 +26,10 @@ func TestTrayStatusAndMenu(t *testing.T) {
 
 func TestTrayRunContextCancel(t *testing.T) {
 	tray := New()
+	tray.menuPresenter = func(ctx context.Context, _ []string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
@@ -52,6 +56,10 @@ func TestNotificationEmitters(t *testing.T) {
 
 func TestTrayDispatch(t *testing.T) {
 	tray := New()
+	tray.menuPresenter = func(ctx context.Context, _ []string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -63,4 +71,31 @@ func TestTrayDispatch(t *testing.T) {
 	// Dispatch known action
 	Dispatch("downloads")
 	time.Sleep(10 * time.Millisecond)
+}
+
+func TestTrayRunInteractiveMenuDispatch(t *testing.T) {
+	tray := New()
+	var renderedItems []string
+	callCount := 0
+	tray.menuPresenter = func(_ context.Context, items []string) (string, error) {
+		callCount++
+		renderedItems = append([]string(nil), items...)
+		if callCount == 1 {
+			return "📂 Open Downloads Folder", nil
+		}
+		return "❌ Quit", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := tray.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, callCount)
+	assert.NotEmpty(t, renderedItems)
+	assert.Equal(t, "notifications", ActionForMenuItem("🔔 Recent Activity & Notifications..."))
+	assert.Equal(t, "settings", ActionForMenuItem("⚙️ Settings & Preferences..."))
+	assert.Equal(t, "doctor", ActionForMenuItem("🩺 Run Diagnostics (Doctor)..."))
+	assert.Equal(t, "downloads", ActionForMenuItem("📂 Open Downloads Folder"))
+	assert.Equal(t, "quit", ActionForMenuItem("❌ Quit"))
 }

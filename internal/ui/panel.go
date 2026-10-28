@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,126 @@ import (
 	"github.com/cirruslabs/tart-guest-agent/internal/settings"
 	"github.com/cirruslabs/tart-guest-agent/internal/spice/filexfer"
 )
+
+// ErrMenuDismissed indicates the tray menu was closed or no interactive GUI session is available.
+var ErrMenuDismissed = errors.New("ui: tray menu dismissed or non-interactive session")
+
+// FormatTrayMenu splits MenuItems() into header lines and selectable action items (excluding "---" separators).
+func FormatTrayMenu(items []string) (prompt string, selectable []string) {
+	var headers []string
+	inHeader := true
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "---" {
+			inHeader = false
+			continue
+		}
+		if inHeader {
+			headers = append(headers, trimmed)
+		} else {
+			selectable = append(selectable, trimmed)
+		}
+	}
+	if len(selectable) == 0 {
+		for _, item := range items {
+			if trimmed := strings.TrimSpace(item); trimmed != "" && trimmed != "---" {
+				selectable = append(selectable, trimmed)
+			}
+		}
+	}
+	prompt = strings.Join(headers, "\n")
+	if prompt == "" {
+		prompt = "Tart Guest Agent"
+	}
+	return prompt, selectable
+}
+
+// ShowTrayMenu presents the interactive tray menu items and returns the user's selected item.
+func ShowTrayMenu(ctx context.Context, items []string) (string, error) {
+	prompt, selectable := FormatTrayMenu(items)
+	if len(selectable) == 0 {
+		return "", ErrMenuDismissed
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("osascript"); err != nil {
+			return "", ErrMenuDismissed
+		}
+		var quoted []string
+		for _, item := range selectable {
+			quoted = append(quoted, fmt.Sprintf(`"%s"`, EscapeAppleScriptString(item)))
+		}
+		script := fmt.Sprintf(
+			`choose from list {%s} with title "Tart Guest Agent" with prompt "%s" OK button name "Open" cancel button name "Close"`,
+			strings.Join(quoted, ", "),
+			EscapeAppleScriptString(prompt),
+		)
+		out, err := exec.CommandContext(ctx, "osascript", "-e", script).Output() // #nosec G204
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", ErrMenuDismissed
+		}
+		choice := strings.TrimSpace(string(out))
+		if choice == "" || choice == "false" {
+			return "", ErrMenuDismissed
+		}
+		return choice, nil
+
+	case "linux":
+		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+			return "", ErrMenuDismissed
+		}
+		if path, err := exec.LookPath("zenity"); err == nil {
+			args := []string{
+				"--list",
+				"--title=Tart Guest Agent",
+				"--text=" + prompt,
+				"--column=Action",
+				"--width=420",
+				"--height=300",
+			}
+			args = append(args, selectable...)
+			out, err := exec.CommandContext(ctx, path, args...).Output() // #nosec G204
+			if err != nil {
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				return "", ErrMenuDismissed
+			}
+			choice := strings.TrimSpace(string(out))
+			if choice == "" {
+				return "", ErrMenuDismissed
+			}
+			return choice, nil
+		}
+		if path, err := exec.LookPath("kdialog"); err == nil {
+			args := []string{"--title", "Tart Guest Agent", "--menu", prompt}
+			for _, item := range selectable {
+				args = append(args, item, item)
+			}
+			out, err := exec.CommandContext(ctx, path, args...).Output() // #nosec G204
+			if err != nil {
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				return "", ErrMenuDismissed
+			}
+			choice := strings.TrimSpace(string(out))
+			if choice == "" {
+				return "", ErrMenuDismissed
+			}
+			return choice, nil
+		}
+		return "", ErrMenuDismissed
+	}
+	return "", ErrMenuDismissed
+}
 
 // FormatRecentNotifications formats the activity list for display in the UI panel.
 func FormatRecentNotifications(events []activity.Event) string {
